@@ -52,17 +52,11 @@ def load_image(image_path: str) -> np.ndarray:
 class Detector:
     def __init__(self,
                  method: str,
-                 image_dir: str,
-                 save_dir: str,
-                 vis_dir: str,
                  min_objsize=10,
                  max_objsize=1000,
                  wh_ratio=5) -> None:
 
         self.method = method
-        self.image_dir = image_dir
-        self.save_dir = save_dir
-        self.vis_dir = vis_dir
         self.min_objsize = min_objsize
         self.max_objsize = max_objsize
         self.wh_ratio = wh_ratio
@@ -74,12 +68,15 @@ class Detector:
         """
         pass
 
-    def detect(self):
+    def detect(self,
+               image_dir:str,
+               save_dir:str,
+               vis_dir:str):
         """
         :return: List of [cx, cy, area, w, h, gray_sum]; if save_dir is not None, saves a txt file there
         """
         eps = 1e-7
-        image = load_image(self.image_dir)
+        image = load_image(image_dir)
         dets = self._run(image)
 
         # === filter out abnormal objects ===
@@ -93,8 +90,8 @@ class Detector:
         print(f"current_method: {self.method}, detected: {len(dets)} objects.")
 
         # === visualize and save ===
-        if self.vis_dir is not None:
-            os.makedirs(self.vis_dir, exist_ok=True)
+        if vis_dir is not None:
+            os.makedirs(vis_dir, exist_ok=True)
             # normalize image to 0-255 uint8 (linear scaling to avoid overflow)
             img = image.copy()
             if img.dtype != np.uint8:
@@ -112,14 +109,14 @@ class Detector:
                 x, y = int(cx - w / 2), int(cy - h / 2)
                 cv2.rectangle(vis, (x, y), (x + int(w), y + int(h)), (0, 0, 255), 1)
 
-            base_name = os.path.splitext(os.path.basename(self.image_dir))[0]
-            save_path = os.path.join(self.vis_dir, f"{base_name}_{self.method}.png")
+            base_name = os.path.splitext(os.path.basename(image_dir))[0]
+            save_path = os.path.join(vis_dir, f"{base_name}_{self.method}.png")
             cv2.imwrite(save_path, vis)
 
-        if self.save_dir is not None:
-            os.makedirs(self.save_dir, exist_ok=True)
-            fname = os.path.splitext(os.path.basename(self.image_dir))[0]
-            out_txt = os.path.join(self.save_dir, f"{fname}_{self.method}.txt")
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            fname = os.path.splitext(os.path.basename(image_dir))[0]
+            out_txt = os.path.join(save_dir, f"{fname}_{self.method}.txt")
             header = f"# columns: cx, cy, area, w, h, gray_sum\n"
             fmt = "{:10.4f} {:10.4f} {:10.4f} {:10.4f} {:10.4f} {:10.1f}\n"
             with open(out_txt, "w") as f:
@@ -279,26 +276,21 @@ class PoissonThresholding(Detector):
 
 
 if __name__ == '__main__':
-    # det = OtsuDetector(
-    #     method="otsu",
-    #     image_dir="test_img/00001.tif",
-    #     save_dir="results/",
-    #     vis_dir="vis/",
-    # )
-    # det = SExtractor(
-    #     method="sep",
-    #     image_dir="test_img/00001.tif",
-    #     save_dir="results/",
-    #     vis_dir="vis/",
-    #     thresh=10
-    # )
-    det = PoissonThresholding(
-        method="pt",
-        image_dir="test_img/00001.tif",
-        save_dir="results/",
-        vis_dir="vis/",
-        binNums=256,
-        criterion="gaussian",
-    )
 
-    results = det.detect()
+    image_dir = "test_img/single_test/20200821152001999_7824_824122_LVT04__0__0.png"
+    save_dir = "results/"
+    vis_dir = "vis/"
+    # det = OtsuDetector(
+    #     method="otsu"
+    # )
+    det = SExtractor(
+        method="sep",
+        thresh=1.5
+    )
+    # det = PoissonThresholding(
+    #     method="pt",
+    #     binNums=256,
+    #     criterion="gaussian",
+    # )
+
+    results = det.detect(image_dir,save_dir,vis_dir)
