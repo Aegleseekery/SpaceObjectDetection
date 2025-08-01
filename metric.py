@@ -1,6 +1,4 @@
 import os
-import math
-import detect
 from typing import List, Tuple, Optional, Union
 import numpy as np
 import json
@@ -119,7 +117,7 @@ class Evaluation:
         """
         Runs evaluation over all matching base filenames in pred_dir and gt_dir.
         Returns summary dictionary with aggregated metrics and per-file breakdown.
-        Also saves results to save_dir if provided.
+        Also saves results to save_dir if provided, with filenames tagged by method.
         """
         summary = {
             "files": [],
@@ -129,23 +127,31 @@ class Evaluation:
             "avg_distance_list": []
         }
 
+        # per-method accumulation
+        per_method = {}
+
         for pred_fname in os.listdir(self.pred_dir):
             if not pred_fname.lower().endswith(".txt"):
                 continue
             basename = os.path.splitext(pred_fname)[0]
+            # Extract gt basename and method name
             if "_" in basename:
-                gt_basename = basename.rsplit("_", 1)[0]
+                gt_basename, method_name = basename.rsplit("_", 1)
             else:
                 gt_basename = basename
+                method_name = "unknown"
+
             pred_path = os.path.join(self.pred_dir, pred_fname)
             gt_path = os.path.join(self.gt_dir, f"{gt_basename}.txt")
+
             TP, FP, FN, avg_dist = self.evaluate_pair(pred_path, gt_path, self.image_shape)
             precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
             recall = TP / (TP + FN) if (TP + FN) > 0 else 0.0
             f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
-            summary["files"].append({
+            entry = {
                 "file": pred_fname,
+                "method": method_name,
                 "TP": TP,
                 "FP": FP,
                 "FN": FN,
@@ -153,12 +159,30 @@ class Evaluation:
                 "precision": precision,
                 "recall": recall,
                 "f1": f1
-            })
+            }
+            summary["files"].append(entry)
             summary["total_TP"] += TP
             summary["total_FP"] += FP
             summary["total_FN"] += FN
             if avg_dist > 0:
                 summary["avg_distance_list"].append(avg_dist)
+
+            # accumulate per-method
+            if method_name not in per_method:
+                per_method[method_name] = {
+                    "files": [],
+                    "total_TP": 0,
+                    "total_FP": 0,
+                    "total_FN": 0,
+                    "avg_distance_list": []
+                }
+            pm = per_method[method_name]
+            pm["files"].append(entry)
+            pm["total_TP"] += TP
+            pm["total_FP"] += FP
+            pm["total_FN"] += FN
+            if avg_dist > 0:
+                pm["avg_distance_list"].append(avg_dist)
 
         # aggregate overall metrics
         total_TP = summary["total_TP"]
@@ -174,10 +198,11 @@ class Evaluation:
         summary["f1"] = f1
         summary["avg_distance"] = avg_distance
 
-        # Save summary and per-file breakdown if requested
+        # Save overall summary and per-file breakdown
         if self.save_dir:
             os.makedirs(self.save_dir, exist_ok=True)
-            # JSON overall summary
+
+            # overall JSON summary
             summary_path = os.path.join(self.save_dir, "summary.json")
             with open(summary_path, "w") as f:
                 json.dump({
@@ -190,15 +215,50 @@ class Evaluation:
                     "total_FN": total_FN,
                 }, f, indent=2)
 
-            # CSV per-file
+            # overall per-file CSV
             perfile_path = os.path.join(self.save_dir, "per_file.csv")
             with open(perfile_path, "w", newline='') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=[
-                    "file", "TP", "FP", "FN", "precision", "recall", "f1", "avg_distance"
+                    "file", "method", "TP", "FP", "FN", "precision", "recall", "f1", "avg_distance"
                 ])
                 writer.writeheader()
                 for row in summary["files"]:
                     writer.writerow(row)
+
+            # per-method outputs
+            for method_name, pm in per_method.items():
+                # compute method-level aggregated metrics
+                m_TP = pm["total_TP"]
+                m_FP = pm["total_FP"]
+                m_FN = pm["total_FN"]
+                m_precision = m_TP / (m_TP + m_FP) if (m_TP + m_FP) > 0 else 0.0
+                m_recall = m_TP / (m_TP + m_FN) if (m_TP + m_FN) > 0 else 0.0
+                m_f1 = 2 * m_precision * m_recall / (m_precision + m_recall) if (m_precision + m_recall) > 0 else 0.0
+                m_avg_distance = float(np.mean(pm["avg_distance_list"])) if pm["avg_distance_list"] else 0.0
+
+                # JSON per-method summary
+                method_summary_path = os.path.join(self.save_dir, f"summary_{method_name}.json")
+                with open(method_summary_path, "w") as f:
+                    json.dump({
+                        "method": method_name,
+                        "precision": m_precision,
+                        "recall": m_recall,
+                        "f1": m_f1,
+                        "avg_distance": m_avg_distance,
+                        "total_TP": m_TP,
+                        "total_FP": m_FP,
+                        "total_FN": m_FN,
+                    }, f, indent=2)
+
+                # CSV per-method breakdown
+                method_perfile_path = os.path.join(self.save_dir, f"per_file_{method_name}.csv")
+                with open(method_perfile_path, "w", newline='') as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=[
+                        "file", "method", "TP", "FP", "FN", "precision", "recall", "f1", "avg_distance"
+                    ])
+                    writer.writeheader()
+                    for row in pm["files"]:
+                        writer.writerow(row)
 
         return summary
 
