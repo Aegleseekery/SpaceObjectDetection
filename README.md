@@ -28,7 +28,6 @@ Lightweight toolkit for detecting and evaluating space / astronomical objects in
 - **Average Localization Error (ALE)**: Mean distance between matched prediction and ground truth centers.  
 - Matching uses greedy nearest neighbor within a radius; each ground truth is matched at most once.
 
-## Illustration Placeholder
 
 ![detection_results](assets/demo.png)  
 
