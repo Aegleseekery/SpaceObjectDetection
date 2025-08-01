@@ -10,8 +10,8 @@ from typing import List, Tuple, Dict, Any, Optional
 
 def load_image(image_path: str) -> np.ndarray:
     """
-    支持 fits, tif/tiff, png/jpg/jpeg/bmp。
-    返回单通道 float64 灰度图，NaN/inf 置为 0。
+    Support fits, tif/tiff, png/jpg/jpeg/bmp.
+    Return single-channel float64 grayscale image, with NaN/inf replaced by 0.
     """
     ext = os.path.splitext(image_path)[1].lower()
 
@@ -19,14 +19,14 @@ def load_image(image_path: str) -> np.ndarray:
         with fits.open(image_path, memmap=False) as hdul:
             data = hdul[0].data
             if data is None:
-                raise ValueError(f"FITS 文件 {image_path} 没有数据")
+                raise ValueError(f"FITS File {image_path} not found.")
             if data.ndim > 2:
                 data = data[0]
             image = np.array(data, dtype=np.float64)
     elif ext in [".tif", ".tiff"]:
         image = tifffile.imread(image_path)
         if image.ndim == 3:
-            # 简单转灰度（加权）
+            # Simple conversion to grayscale (weighted)
             img = image[..., :3].astype(np.float64)
             image = 0.21 * img[..., 0] + 0.72 * img[..., 1] + 0.07 * img[..., 2]
         image = image.astype(np.float64)
@@ -36,24 +36,25 @@ def load_image(image_path: str) -> np.ndarray:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         image = image.astype(np.float64)
     else:
-        # 通用尝试用 OpenCV
+        # Generic attempt using OpenCV
         image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if image is None:
-            raise FileNotFoundError(f"不支持的图像格式或无法加载: {image_path}")
+            raise FileNotFoundError(f"unsupported type of image: {image_path}")
         if image.ndim == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         image = image.astype(np.float64)
 
-    # 清理 NaN / inf
+    # Clean NaN / inf values
     image = np.nan_to_num(image, nan=0.0, posinf=0.0, neginf=0.0)
     return image
 
+
 class Detector:
     def __init__(self,
-                 method:str,
-                 image_dir:str,
+                 method: str,
+                 image_dir: str,
                  save_dir: str,
-                 vis_dir:str,
+                 vis_dir: str,
                  min_objsize=10,
                  max_objsize=1000,
                  wh_ratio=5) -> None:
@@ -68,43 +69,33 @@ class Detector:
 
     def _run(self):
         """
-        检测的核心函数
-        :return: 粗检测结果
+        Core detection logic.
+        :return: detections in standard format
         """
         pass
-    def _parse(self):
-        """
-        解析检测结果，并转为标准格式
-        :return:
-        """
 
     def detect(self):
         """
-
-        :param image_path: 图像所在目录
-        :return: 返回形如[[cx,cy,area,w,h,gray_sum],...]的一个List,在save_dir不为None时,将结果的txt保存在save_dir下，在
+        :return: List of [cx, cy, area, w, h, gray_sum]; if save_dir is not None, saves a txt file there
         """
         eps = 1e-7
-        image= load_image(self.image_dir)
-        raw_output = self._run(image)
-        results = self._parse(raw_output)
+        image = load_image(self.image_dir)
+        dets = self._run(image)
 
-        '滤除异常目标'
-        # 滤除大小异常的目标
-        results = results[(results[:,-3] * results[:,-2] > self.min_objsize) *
-                          (results[:,-2] * results[:,-3]) <self.max_objsize]
-        # 去长条
-        results = results[(results[:,-3] / (results[:,-2] + eps) < self.wh_ratio) *
-                          (results[:,-2] / (results[:,-3] + eps) < self.wh_ratio)]
+        # === filter out abnormal objects ===
+        # filter by size constraints
+        dets = dets[(dets[:, -3] * dets[:, -2] > self.min_objsize) *
+                    (dets[:, -2] * dets[:, -3] < self.max_objsize)]
+        # remove elongated shapes
+        dets = dets[(dets[:, -3] / (dets[:, -2] + eps) < self.wh_ratio) *
+                    (dets[:, -2] / (dets[:, -3] + eps) < self.wh_ratio)]
 
-        print(f"current_method: {self.method}, detected: {len(results)} objects.")
+        print(f"current_method: {self.method}, detected: {len(dets)} objects.")
 
-
-        '可视化并保存'
+        # === visualize and save ===
         if self.vis_dir is not None:
             os.makedirs(self.vis_dir, exist_ok=True)
-
-            # 规范 image 到 0-255 uint8（线性缩放避免溢出）
+            # normalize image to 0-255 uint8 (linear scaling to avoid overflow)
             img = image.copy()
             if img.dtype != np.uint8:
                 mn, mx = np.min(img), np.max(img)
@@ -117,7 +108,7 @@ class Detector:
                 img = image.astype(np.uint8)
 
             vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            for cx, cy, area, w, h, *_ in results:
+            for cx, cy, area, w, h, *_ in dets:
                 x, y = int(cx - w / 2), int(cy - h / 2)
                 cv2.rectangle(vis, (x, y), (x + int(w), y + int(h)), (0, 0, 255), 1)
 
@@ -133,11 +124,12 @@ class Detector:
             fmt = "{:10.4f} {:10.4f} {:10.4f} {:10.4f} {:10.4f} {:10.1f}\n"
             with open(out_txt, "w") as f:
                 f.write(header)
-                for row in results:
+                for row in dets:
                     cx, cy, area, w, h, gray_sum = row
                     f.write(fmt.format(cx, cy, area, w, h, gray_sum))
 
-        return results
+        return dets
+
 
 class OtsuDetector(Detector):
     def __init__(self, *args, min_area: float = 5.0, **kwargs):
@@ -146,33 +138,27 @@ class OtsuDetector(Detector):
 
     def _run(self, image: np.ndarray) -> Any:
         """
-        用大津阈值做二值化，然后用连通区域提取候选。
-        返回 (regions, image)，regions 是 regionprops 列表。
+        Apply Otsu thresholding and extract connected components.
+        Returns (regions, image), where regions is a list of regionprops.
         """
-        # 1. 线性缩放到 0-255 uint8（保留相对强度）
-        img = image.astype(np.float64)
-        mn, mx = np.min(img), np.max(img)
+        # 1. Linear scale to 0-255 uint8 (preserve relative intensity)
+        mn, mx = np.min(image), np.max(image)
         if mx > mn:
-            norm = (img - mn) / (mx - mn) * 255.0
+            norm = (image - mn) / (mx - mn) * 255.0
         else:
-            norm = np.zeros_like(img)
+            norm = np.zeros_like(image)
         norm_uint8 = np.clip(norm, 0, 255).astype(np.uint8)
 
-        # 2. Otsu 阈值
+        # 2. Otsu thresholding
         _, bw = cv2.threshold(norm_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # 3. 连通区域分析（用原始 image 做 intensity_image）
+        # 3. Connected component analysis (use original image as intensity image)
         labeled = label(bw > 0)
         regions = regionprops(labeled, intensity_image=image)
 
-        return regions, image  # 后面 parse 用
-
-    def _parse(self, raw_output: Any) -> np.ndarray:
-        regions, image = raw_output
         result_list = []
-        h_img, w_img = image.shape[:2]
         for r in regions:
-            cy, cx = r.centroid  # 注意 skimage 顺序 (row, col)
+            cy, cx = r.centroid  # skimage order: (row, col)
             area = float(r.area)
             minr, minc, maxr, maxc = r.bbox  # (min_row, min_col, max_row, max_col)
             w = float(maxc - minc)
@@ -181,47 +167,115 @@ class OtsuDetector(Detector):
                 continue
             gray_sum = float(r.intensity_image.sum())
             result_list.append([cx, cy, area, w, h, gray_sum])
-
         if not result_list:
             return np.zeros((0, 6), dtype=float)
         return np.array(result_list, dtype=float)
 
+
 class SExtractor(Detector):
-    def __init__(self, *args, thresh: float = 1.5, min_area: float = 5.0, **kwargs):
+    def __init__(self, *args, thresh: float = 1.5, **kwargs):
         """
-        :param thresh: 以背景 rms 的倍数作为阈值（类似 SExtractor 的 DETECT_THRESH）
-        :param min_area: 过滤面积过小的（以 bbox 面积）
+        Source extraction using sep (analogous to SExtractor).
+        :param thresh: threshold multiplier of background RMS (similar to DETECT_THRESH)
         """
         super().__init__(*args, **kwargs)
         self.thresh = thresh
-        self.min_area = min_area
 
     def _run(self, image: np.ndarray) -> Any:
         """
-        用 sep 做背景建模和提取，返回 objects 结构数组
+        Build background model and extract sources using sep.
         """
-        # sep 需要 C-contiguous float32/float64
-        data = image.astype(np.float64)
-        # build background
-        bkg = sep.Background(data)
-        data_sub = data - bkg
-        # 提取对象，阈值是背景 rms * thresh
+        bkg = sep.Background(image)
+        data_sub = image - bkg
+        # Extract objects with threshold = background RMS * thresh
         objects = sep.extract(data_sub, self.thresh, err=bkg.globalrms)
-        return objects
-
-    def _parse(self, raw_output: Any) -> List[List[float]]:
-        """
-        把 sep 输出转成 [cx, cy, area, w, h, gray_sum]
-        这里近似用 2*a, 2*b 作为 bbox 宽高（不考虑旋转），area=w*h。
-        gray_sum 取 bbox 内原图求和。
-        """
         se_dets = np.array([[i[7],
                              i[8],
                              i[1],
-                             i[4]-i[3],
-                             i[6]-i[5],
-                             i[-8]] for i in raw_output])
+                             i[4] - i[3],
+                             i[6] - i[5],
+                             i[-8]] for i in objects])
         return se_dets
+
+
+class PoissonThresholding(Detector):
+    def __init__(self, *args, binNums=256, criterion='gaussian', **kwargs):
+        """
+        An Improved Automatic Detection and Segmentation of Cell Nuclei in Histopathology Images
+        https://ieeexplore.ieee.org/document/5306149
+        :param binNums: number of histogram bins
+        :param criterion: error criterion, default is gaussian
+        """
+        super().__init__(*args, **kwargs)
+        self.binNums = binNums
+        self.criterion = criterion
+
+    def minerrthresh(self, image: np.ndarray):
+        """
+        Compute minimum error threshold using specified statistical model.
+        """
+        img_min, img_max = np.min(image), np.max(image)
+
+        binMultiplier = self.binNums / (img_max - img_min)
+
+        hist, _ = np.histogram(image, bins=self.binNums, range=(img_min, img_max))
+        hist = hist / np.sum(hist)
+
+        total_mean = np.sum(np.arange(1, self.binNums + 1) * hist)  # indices start from 1
+
+        error_func = np.zeros(self.binNums)
+
+        # iterate over candidate thresholds
+        for i in range(2, self.binNums - 1):  # MATLAB range 2 to binNums-1
+            prior_left = np.sum(hist[:i]) + np.finfo(float).eps
+            prior_right = np.sum(hist[i:]) + np.finfo(float).eps
+
+            mean_left = np.sum((np.arange(0, i) * hist[:i])) / prior_left
+            mean_right = np.sum((np.arange(i, self.binNums) * hist[i:])) / prior_right
+
+            if self.criterion == 'gaussian':
+                # Gaussian model
+                var_left = np.sum(((np.arange(0, i) - mean_left) ** 2) * hist[:i]) / prior_left
+                var_right = np.sum(((np.arange(i, self.binNums) - mean_right) ** 2) * hist[i:]) / prior_right
+                std_left = np.sqrt(var_left) + np.finfo(float).eps
+                std_right = np.sqrt(var_right) + np.finfo(float).eps
+                error_func[i] = 1 + 2 * (prior_left * np.log(std_left) + prior_right * np.log(std_right)) \
+                                - 2 * (prior_left * np.log(prior_left) + prior_right * np.log(prior_right))
+            elif self.criterion == 'poisson':
+                # Poisson model
+                error_func[i] = total_mean \
+                                - prior_left * (np.log(prior_left) + mean_left * np.log(mean_left + np.finfo(float).eps)) \
+                                - prior_right * (np.log(prior_right) + mean_right * np.log(mean_right + np.finfo(float).eps))
+
+        t_star = np.argmin(error_func[2:self.binNums - 1]) + 2
+        threshold = img_min + t_star / binMultiplier
+        return threshold
+
+    def _run(self, image: np.ndarray) -> Any:
+        """
+        Threshold using the minimum error criterion, then extract connected components.
+        """
+        # Binarization
+        threshold = self.minerrthresh(image)
+        print('threshold:', threshold)
+        binary_image = image > threshold
+
+        # Connected component analysis
+        labeled_img = label(binary_image)
+        regions = regionprops(labeled_img, intensity_image=image)
+
+        pt_dets = []
+        for r in regions:
+            cy, cx = r.centroid
+            area = r.area
+            minr, minc, maxr, maxc = r.bbox
+            w = maxc - minc
+            h = maxr - minr
+            gray_sum = r.intensity_image.sum()
+            pt_dets.append([cx, cy, area, w, h, gray_sum])
+
+        pt_dets = np.array(pt_dets, dtype=np.float32)
+        return pt_dets
 
 
 if __name__ == '__main__':
@@ -231,14 +285,20 @@ if __name__ == '__main__':
     #     save_dir="results/",
     #     vis_dir="vis/",
     # )
-    det = SExtractor(
-        method="sep",
+    # det = SExtractor(
+    #     method="sep",
+    #     image_dir="test_img/00001.tif",
+    #     save_dir="results/",
+    #     vis_dir="vis/",
+    #     thresh=10
+    # )
+    det = PoissonThresholding(
+        method="pt",
         image_dir="test_img/00001.tif",
         save_dir="results/",
         vis_dir="vis/",
-        thresh=1.5
+        binNums=256,
+        criterion="gaussian",
     )
 
     results = det.detect()
-
-
