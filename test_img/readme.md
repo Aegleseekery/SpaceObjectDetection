@@ -1,1 +1,1 @@
-Test Datasets(including .fit, .tif, .png)
+Test Datasets
